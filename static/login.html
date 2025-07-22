@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+        .test-oauth {
+            background-color: #17a2b8;
+        }
+        .test-oauth:hover {
+            background-color: #138496;
+        }
+        .message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .links {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+        .oauth-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+        .oauth-inputs {
+            margin-bottom: 15px;
+        }
+        .oauth-inputs input {
+            margin-bottom: 10px;
+        }
+        .jwt-details {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .jwt-section {
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .jwt-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        .jwt-section h4 {
+            margin: 0 0 8px 0;
+            color: #495057;
+            font-size: 14px;
+            font-family: Arial, sans-serif;
+        }
+        .jwt-raw {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 3px;
+            max-height: 100px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+        }
+        .jwt-decoded {
+            background-color: #ffffff;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+        }
+        .jwks-section {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #dee2e6;
+        }
+        .copy-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #dee2e6;
+        }
+        .copy-button {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+        .copy-button:hover {
+            background-color: #5a6268;
+        }
+        .copy-success {
+            color: #28a745;
+            font-size: 10px;
+            margin-left: 8px;
+        }
+        .token-display {
+            background-color: #ffffff;
+            border: 1px solid #28a745;
+            border-radius: 3px;
+            padding: 10px;
+            margin-bottom: 10px;
+            user-select: all;
+            cursor: text;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>User Login</h2>
+        
+        <!-- Standard Login Form -->
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit">Login (Get Token)</button>
+        </form>
+        
+        <!-- OAuth Test Section -->
+        <div class="oauth-section">
+            <h3>Test OAuth Flow</h3>
+            <div class="oauth-inputs">
+                <input type="text" id="clientId" placeholder="Client ID" value="">
+                <input type="text" id="redirectUri" placeholder="Redirect URI" value="http://localhost:3000/callback">
+            </div>
+            <button type="button" class="test-oauth" onclick="testOAuth()">Test OAuth Authorization</button>
+        </div>
+        
+        <div id="message" class="message" style="display: none;"></div>
+        
+        <div class="links">
+            <a href="register.html">Register</a>
+            <a href="client-register.html">Register OAuth Client</a>
+            <a href="/.well-known/jwks.json" target="_blank">View JWKS</a>
+        </div>
+    </div>
+
+    <script>
+        // Standard login form
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('grant_type', 'password');
+            formData.append('username', document.getElementById('username').value);
+            formData.append('password', document.getElementById('password').value);
+            
+            try {
+                const response = await fetch('/token', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                const messageDiv = document.getElementById('message');
+                
+                if (response.ok) {
+                    messageDiv.className = 'message success';
+                    messageDiv.innerHTML = `<strong>Login successful!</strong>`;
+                    
+                    // Display full JWT details
+                    displayJWTDetails(result.access_token);
+                    
+                    // Store token for testing
+                    localStorage.setItem('access_token', result.access_token);
+                    
+                    // Test getting user info
+                    setTimeout(async () => {
+                        try {
+                            const userResponse = await fetch('/oauth/userinfo', {
+                                headers: {
+                                    'Authorization': `Bearer ${result.access_token}`
+                                }
+                            });
+                            const userInfo = await userResponse.json();
+                            if (userResponse.ok) {
+                                const userInfoDiv = document.createElement('div');
+                                userInfoDiv.innerHTML = `<br><strong>User Info:</strong> ${userInfo.username} (${userInfo.email})`;
+                                messageDiv.appendChild(userInfoDiv);
+                            }
+                        } catch (e) {
+                            console.error('Error fetching user info:', e);
+                        }
+                    }, 500);
+                    
+                } else {
+                    messageDiv.className = 'message error';
+                    messageDiv.textContent = result.detail || 'Login failed';
+                }
+                
+                messageDiv.style.display = 'block';
+            } catch (error) {
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'Network error: ' + error.message;
+                messageDiv.style.display = 'block';
+            }
+        });
+        
+        // OAuth flow test
+        function testOAuth() {
+            const clientId = document.getElementById('clientId').value;
+            const redirectUri = document.getElementById('redirectUri').value;
+            
+            if (!clientId) {
+                alert('Please enter a Client ID');
+                return;
+            }
+            
+            const params = new URLSearchParams({
+                response_type: 'code',
+                client_id: clientId,
+                redirect_uri: redirectUri,
+                scope: 'read',
+                state: 'test_state_' + Date.now()
+            });
+            
+            // Open OAuth authorization in new window
+            const authUrl = `/oauth/authorize?${params.toString()}`;
+            window.open(authUrl, 'oauth', 'width=500,height=600');
+        }
+        
+        // JWT decoding and display functions
+        function base64UrlDecode(str) {
+            // Replace base64url chars with base64 chars
+            str = str.replace(/-/g, '+').replace(/_/g, '/');
+            // Add padding if needed
+            while (str.length % 4) {
+                str += '=';
+            }
+            return atob(str);
+        }
+        
+        function displayJWTDetails(token) {
+            console.log('Displaying JWT details for token:', token.substring(0, 50) + '...');
+            const parts = token.split('.');
+            if (parts.length !== 3) {
+                console.error('Invalid JWT format, parts:', parts.length);
+                return;
+            }
+            
+            try {
+                // Decode header and payload
+                console.log('Decoding header:', parts[0]);
+                const header = JSON.parse(base64UrlDecode(parts[0]));
+                console.log('Header decoded:', header);
+                
+                console.log('Decoding payload:', parts[1]);
+                const payload = JSON.parse(base64UrlDecode(parts[1]));
+                console.log('Payload decoded:', payload);
+                
+                const signature = parts[2];
+                
+                // Format timestamps
+                const formatTimestamp = (timestamp) => {
+                    return timestamp ? new Date(timestamp * 1000).toLocaleString() : 'N/A';
+                };
+                
+                // Create JWT details div
+                const jwtDetailsDiv = document.createElement('div');
+                jwtDetailsDiv.className = 'jwt-details';
+                jwtDetailsDiv.innerHTML = `
+                    <div class="copy-section" id="copySection">
+                        <h4>📋 Copy JWT Token:</h4>
+                        <div class="token-display" id="copyableToken">${token}</div>
+                        <span id="copyFeedback" class="copy-success" style="display: none;">Copied!</span>
+                    </div>
+                    
+                    <div class="jwt-section">
+                        <h4>Full JWT Token (Raw):</h4>
+                        <div class="jwt-raw">${token}</div>
+                    </div>
+                    
+                    <div class="jwt-section">
+                        <h4>Header:</h4>
+                        <div class="jwt-decoded">${JSON.stringify(header, null, 2)}</div>
+                    </div>
+                    
+                    <div class="jwt-section">
+                        <h4>Payload:</h4>
+                        <div class="jwt-decoded">${JSON.stringify(payload, null, 2)}</div>
+                        <div style="margin-top: 8px; font-size: 11px; color: #6c757d;">
+                            <strong>Issued:</strong> ${formatTimestamp(payload.iat)}<br>
+                            <strong>Expires:</strong> ${formatTimestamp(payload.exp)}<br>
+                            <strong>Subject:</strong> ${payload.sub}<br>
+                            <strong>Issuer:</strong> ${payload.iss}<br>
+                            <strong>Key ID:</strong> ${payload.kid}
+                        </div>
+                    </div>
+                    
+                    <div class="jwt-section">
+                        <h4>Signature:</h4>
+                        <div class="jwt-raw">${signature}</div>
+                    </div>
+                    
+                    <div class="jwks-section">
+                        <h4>Verification:</h4>
+                        <div style="font-size: 11px; color: #495057; font-family: Arial, sans-serif;">
+                            This JWT is signed with RSA ${header.alg}. <br>
+                            Verify using the public key from: <a href="/.well-known/jwks.json" target="_blank">JWKS endpoint</a><br>
+                            Test at: <a href="https://jwt.io" target="_blank">jwt.io</a> or <a href="https://token.dev" target="_blank">token.dev</a>
+                        </div>
+                    </div>
+                `;
+                
+                // Add the copy button programmatically to avoid onclick issues
+                const copyButton = document.createElement('button');
+                copyButton.className = 'copy-button';
+                copyButton.textContent = 'Copy Token';
+                copyButton.onclick = function() { copyToken(token, copyButton); };
+                
+                const copySection = jwtDetailsDiv.querySelector('#copySection');
+                copySection.appendChild(copyButton);
+                
+                document.getElementById('message').appendChild(jwtDetailsDiv);
+                
+            } catch (error) {
+                console.error('Error decoding JWT:', error);
+            }
+        }
+        
+        // Copy token function
+        function copyToken(token, button) {
+            navigator.clipboard.writeText(token).then(() => {
+                const feedback = document.getElementById('copyFeedback');
+                feedback.style.display = 'inline';
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    feedback.style.display = 'none';
+                    button.textContent = 'Copy Token';
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = token;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                
+                button.textContent = 'Copied!';
+                setTimeout(() => {
+                    button.textContent = 'Copy Token';
+                }, 2000);
+            });
+        }
+        
+        // Handle OAuth callback (if on same domain)
+        window.addEventListener('message', function(event) {
+            if (event.origin !== window.location.origin) return;
+            
+            if (event.data.type === 'oauth_callback') {
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message success';
+                messageDiv.innerHTML = `
+                    <strong>OAuth Flow Complete!</strong><br>
+                    <small>Authorization Code: ${event.data.code.substring(0, 20)}...</small><br>
+                    <small>State: ${event.data.state}</small>
+                `;
+                messageDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth Client Registration</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="url"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background-color: #6f42c1;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #5a32a3;
+        }
+        .message {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .credentials {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+            word-break: break-all;
+        }
+        .credentials strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .links {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+        .note {
+            background-color: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            color: #004085;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>OAuth Client Registration</h2>
+        
+        <div class="note">
+            <strong>Note:</strong> Register your application to get client credentials for OAuth authentication.
+        </div>
+        
+        <form id="clientForm">
+            <div class="form-group">
+                <label for="name">Application Name:</label>
+                <input type="text" id="name" name="name" required placeholder="My Test App">
+            </div>
+            <div class="form-group">
+                <label for="redirectUri">Redirect URI:</label>
+                <input type="url" id="redirectUri" name="redirectUri" required placeholder="http://localhost:3000/callback">
+            </div>
+            <button type="submit">Register Client</button>
+        </form>
+        
+        <div id="message" class="message" style="display: none;"></div>
+        
+        <div class="links">
+            <a href="register.html">Register User</a>
+            <a href="login.html">Login</a>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('clientForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData();
+            formData.append('name', document.getElementById('name').value);
+            formData.append('redirect_uri', document.getElementById('redirectUri').value);
+            
+            try {
+                const response = await fetch('/register_client', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                const messageDiv = document.getElementById('message');
+                
+                if (response.ok) {
+                    messageDiv.className = 'message success';
+                    messageDiv.innerHTML = `
+                        <strong>Client registered successfully!</strong>
+                        <div class="credentials">
+                            <strong>Client ID:</strong> ${result.client_id}<br>
+                            <strong>Client Secret:</strong> ${result.client_secret}<br>
+                            <strong>Redirect URI:</strong> ${result.redirect_uri}
+                        </div>
+                        <small style="display: block; margin-top: 10px; color: #856404;">
+                            <strong>Important:</strong> Save these credentials securely. The client secret won't be shown again.
+                        </small>
+                    `;
+                    document.getElementById('clientForm').reset();
+                } else {
+                    messageDiv.className = 'message error';
+                    messageDiv.textContent = result.detail || 'Registration failed';
+                }
+                
+                messageDiv.style.display = 'block';
+            } catch (error) {
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'Network error: ' + error.message;
+                messageDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>

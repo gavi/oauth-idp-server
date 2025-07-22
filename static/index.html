@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth IdP Server - Testing Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        .section h3 {
+            color: #444;
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin: 5px 10px 5px 0;
+            transition: background-color 0.3s;
+        }
+        .button:hover {
+            background-color: #0056b3;
+        }
+        .button.success {
+            background-color: #28a745;
+        }
+        .button.success:hover {
+            background-color: #218838;
+        }
+        .button.info {
+            background-color: #17a2b8;
+        }
+        .button.info:hover {
+            background-color: #138496;
+        }
+        .button.warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .button.warning:hover {
+            background-color: #e0a800;
+        }
+        .endpoints {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+        }
+        .endpoints h4 {
+            margin-top: 0;
+            color: #495057;
+        }
+        .endpoint {
+            margin: 5px 0;
+            font-family: monospace;
+            background: white;
+            padding: 5px 8px;
+            border-radius: 3px;
+            border: 1px solid #dee2e6;
+        }
+        .method {
+            font-weight: bold;
+            color: #28a745;
+        }
+        .method.post {
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OAuth IdP Server</h1>
+        <p class="subtitle">Testing Interface for OAuth Authentication</p>
+        
+        <div class="section">
+            <h3>🚀 Quick Start</h3>
+            <p>Use these tools to test your OAuth Identity Provider server:</p>
+            <a href="register.html" class="button">Register User</a>
+            <a href="client-register.html" class="button info">Register OAuth Client</a>
+            <a href="login.html" class="button success">Login & Test</a>
+        </div>
+        
+        <div class="section">
+            <h3>📋 Testing Workflow</h3>
+            <ol>
+                <li><strong>Register a User:</strong> Create a test user account</li>
+                <li><strong>Register an OAuth Client:</strong> Get client credentials for your application</li>
+                <li><strong>Test Authentication:</strong> Try both direct login and OAuth flow</li>
+            </ol>
+        </div>
+        
+        <div class="section">
+            <h3>🔗 Available API Endpoints</h3>
+            <div class="endpoints">
+                <h4>User Management</h4>
+                <div class="endpoint"><span class="method post">POST</span> /register - Register new user</div>
+                
+                <h4>OAuth 2.0 Flow</h4>
+                <div class="endpoint"><span class="method">GET</span> /oauth/authorize - Authorization endpoint</div>
+                <div class="endpoint"><span class="method post">POST</span> /oauth/login - OAuth login handler</div>
+                <div class="endpoint"><span class="method post">POST</span> /oauth/token - Token endpoint</div>
+                <div class="endpoint"><span class="method">GET</span> /oauth/userinfo - User information</div>
+                
+                <h4>Client Management</h4>
+                <div class="endpoint"><span class="method post">POST</span> /register_client - Register OAuth client</div>
+                
+                <h4>Discovery</h4>
+                <div class="endpoint"><span class="method">GET</span> /.well-known/oauth-authorization-server - OAuth metadata</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>💡 Example OAuth Flow</h3>
+            <p>Test the complete OAuth 2.0 Authorization Code flow:</p>
+            <ol>
+                <li>Register a client and copy the Client ID</li>
+                <li>Go to the login page and use "Test OAuth Authorization"</li>
+                <li>Login with your user credentials</li>
+                <li>Get redirected back with an authorization code</li>
+                <li>Exchange the code for an access token</li>
+            </ol>
+        </div>
+        
+        <div class="section">
+            <h3>⚙️ Server Status</h3>
+            <p>Server is running at: <strong id="serverUrl">http://localhost:8000</strong></p>
+            <button onclick="checkStatus()" class="button warning">Check Server Status</button>
+            <div id="status" style="margin-top: 10px;"></div>
+        </div>
+    </div>
+
+    <script>
+        // Set the current server URL
+        document.getElementById('serverUrl').textContent = window.location.origin;
+        
+        async function checkStatus() {
+            const statusDiv = document.getElementById('status');
+            try {
+                const response = await fetch('/');
+                const data = await response.json();
+                if (response.ok) {
+                    statusDiv.innerHTML = `<span style="color: #28a745;">✅ Server is running: ${data.message}</span>`;
+                } else {
+                    statusDiv.innerHTML = `<span style="color: #dc3545;">❌ Server error</span>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<span style="color: #dc3545;">❌ Cannot connect to server</span>`;
+            }
+        }
+        
+        // Auto-check status on load
+        window.addEventListener('load', checkStatus);
+    </script>
+</body>
+</html>
