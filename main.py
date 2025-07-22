@@ -16,6 +16,7 @@ from typing import Optional
 import urllib.parse
 import base64
 import json
+import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import load_dotenv
@@ -29,12 +30,53 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 
-# Generate RSA key pair for JWT signing (in production, use persistent keys)
-private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048,
-)
-public_key = private_key.public_key()
+# RSA key pair for JWT signing
+def load_or_generate_keys():
+    private_key_path = os.getenv("PRIVATE_KEY_PATH", "jwt_private_key.pem")
+    public_key_path = os.getenv("PUBLIC_KEY_PATH", "jwt_public_key.pem")
+    
+    # Try to load existing keys
+    if os.path.exists(private_key_path) and os.path.exists(public_key_path):
+        try:
+            with open(private_key_path, "rb") as f:
+                private_key = serialization.load_pem_private_key(f.read(), password=None)
+            with open(public_key_path, "rb") as f:
+                public_key = serialization.load_pem_public_key(f.read())
+            print("Loaded existing RSA keys")
+            return private_key, public_key
+        except Exception as e:
+            print(f"Error loading keys: {e}, generating new ones")
+    
+    # Generate new keys if loading failed or files don't exist
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    public_key = private_key.public_key()
+    
+    # Save keys if in development mode
+    if os.getenv("SAVE_KEYS", "true").lower() == "true":
+        try:
+            with open(private_key_path, "wb") as f:
+                f.write(private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+            with open(public_key_path, "wb") as f:
+                f.write(public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                ))
+            print(f"Generated and saved new RSA keys to {private_key_path} and {public_key_path}")
+        except Exception as e:
+            print(f"Could not save keys: {e}")
+    else:
+        print("Generated new RSA keys (not saved)")
+    
+    return private_key, public_key
+
+private_key, public_key = load_or_generate_keys()
 
 # Serialize keys
 private_pem = private_key.private_bytes(
@@ -114,6 +156,38 @@ class AuthorizationCode(Base):
     expires_at = Column(DateTime)
     used = Column(Boolean, default=False)
 
+class ThirdPartyProvider(Base):
+    __tablename__ = "third_party_providers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    client_id = Column(String)
+    client_secret = Column(String)
+    authorization_endpoint = Column(String)
+    token_endpoint = Column(String)
+    userinfo_endpoint = Column(String)
+    scope = Column(String, default="openid profile email")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ThirdPartySession(Base):
+    __tablename__ = "third_party_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, unique=True, index=True)
+    provider_id = Column(Integer)
+    mcp_client_id = Column(String)
+    third_party_access_token = Column(Text)
+    third_party_refresh_token = Column(Text, nullable=True)
+    third_party_token_expires_at = Column(DateTime, nullable=True)
+    third_party_user_id = Column(String)
+    mcp_access_token = Column(Text, nullable=True)
+    state = Column(String, nullable=True)
+    original_redirect_uri = Column(String)
+    expires_at = Column(DateTime)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -132,7 +206,7 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, scope: str = "profile email"):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
@@ -142,7 +216,8 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
         "exp": expire,
         "iat": datetime.utcnow(),
         "iss": BASE_URL,
-        "kid": KEY_ID
+        "kid": KEY_ID,
+        "scope": scope
     })
     encoded_jwt = jwt.encode(to_encode, private_pem, algorithm=ALGORITHM)
     return encoded_jwt
@@ -174,14 +249,42 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     try:
         payload = jwt.decode(token, public_pem, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
+        token_type: str = payload.get("token_type")
+        
         if username is None:
             raise credentials_exception
+        
+        # Handle third-party bound tokens
+        if token_type == "third_party_bound":
+            session_id = payload.get("session_id")
+            if not session_id:
+                raise credentials_exception
+            
+            session = get_third_party_session(db, session_id)
+            if not session or not validate_third_party_token_status(db, session):
+                raise credentials_exception
+            
+            # Return a user-like object for third-party users
+            class ThirdPartyUser:
+                def __init__(self, session, payload):
+                    self.id = payload.get("user_id")
+                    self.username = username
+                    self.email = f"{payload.get('user_id')}@{payload.get('provider')}"
+                    self.provider = payload.get("provider")
+                    self.session_id = session_id
+                    self.is_third_party = True
+            
+            return ThirdPartyUser(session, payload)
+        
+        # Handle standard users
+        user = get_user(db, username=username)
+        if user is None:
+            raise credentials_exception
+        user.is_third_party = False
+        return user
+        
     except JWTError:
         raise credentials_exception
-    user = get_user(db, username=username)
-    if user is None:
-        raise credentials_exception
-    return user
 
 # OAuth Client functions
 def get_oauth_client(db: Session, client_id: str):
@@ -192,6 +295,84 @@ def verify_client_secret(db: Session, client_id: str, client_secret: str):
     if not client:
         return False
     return hashlib.sha256(client_secret.encode()).hexdigest() == client.client_secret
+
+# Third-party provider functions
+def get_third_party_provider(db: Session, provider_id: int):
+    return db.query(ThirdPartyProvider).filter(
+        ThirdPartyProvider.id == provider_id,
+        ThirdPartyProvider.is_active == True
+    ).first()
+
+def get_third_party_provider_by_name(db: Session, name: str):
+    return db.query(ThirdPartyProvider).filter(
+        ThirdPartyProvider.name == name,
+        ThirdPartyProvider.is_active == True
+    ).first()
+
+def create_third_party_session(db: Session, provider_id: int, client_id: str, redirect_uri: str, state: str = None):
+    session_id = secrets.token_urlsafe(32)
+    expires_at = datetime.utcnow() + timedelta(hours=1)  # 1 hour session timeout
+    
+    session = ThirdPartySession(
+        session_id=session_id,
+        provider_id=provider_id,
+        mcp_client_id=client_id,
+        original_redirect_uri=redirect_uri,
+        state=state,
+        expires_at=expires_at
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+def get_third_party_session(db: Session, session_id: str):
+    return db.query(ThirdPartySession).filter(
+        ThirdPartySession.session_id == session_id,
+        ThirdPartySession.is_active == True,
+        ThirdPartySession.expires_at > datetime.utcnow()
+    ).first()
+
+async def exchange_third_party_code(provider: ThirdPartyProvider, code: str, redirect_uri: str):
+    """Exchange third-party authorization code for tokens"""
+    async with httpx.AsyncClient() as client:
+        token_data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": provider.client_id,
+            "client_secret": provider.client_secret
+        }
+        
+        response = await client.post(provider.token_endpoint, data=token_data)
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to exchange authorization code")
+        
+        return response.json()
+
+async def get_third_party_user_info(provider: ThirdPartyProvider, access_token: str):
+    """Get user info from third-party provider"""
+    async with httpx.AsyncClient() as client:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        response = await client.get(provider.userinfo_endpoint, headers=headers)
+        
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to get user info")
+        
+        return response.json()
+
+def validate_third_party_token_status(db: Session, session: ThirdPartySession):
+    """Validate that third-party token is still valid"""
+    if not session.is_active:
+        return False
+    
+    if session.third_party_token_expires_at and session.third_party_token_expires_at < datetime.utcnow():
+        # Mark session as inactive if token expired
+        session.is_active = False
+        db.commit()
+        return False
+    
+    return True
 
 # API Endpoints
 
@@ -211,9 +392,71 @@ def register(username: str = Form(...), password: str = Form(...), email: str = 
     
     return {"message": "User created successfully"}
 
-# OAuth client registration (for testing - remove in production)
+# OAuth 2.0 Dynamic Client Registration (RFC 7591)
+@app.post("/register")
+async def register_client(request: Request, db: Session = Depends(get_db)):
+    try:
+        # Parse JSON body for dynamic client registration
+        body = None
+        content_type = request.headers.get("content-type", "")
+        
+        if "application/json" in content_type:
+            body = await request.json()
+        else:
+            # Fallback to form data for backward compatibility
+            form = await request.form()
+            redirect_uris = form.get("redirect_uris", "").split(",")
+            client_name = form.get("client_name", "")
+            body = {
+                "redirect_uris": [uri.strip() for uri in redirect_uris if uri.strip()],
+                "client_name": client_name
+            }
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+    
+    # Validate required fields
+    redirect_uris = body.get("redirect_uris", [])
+    if not redirect_uris:
+        raise HTTPException(status_code=400, detail="redirect_uris is required")
+    
+    client_name = body.get("client_name", "Unnamed Client")
+    
+    # Generate client credentials
+    client_id = secrets.token_urlsafe(16)
+    client_secret = secrets.token_urlsafe(32)
+    client_secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
+    
+    # Use first redirect URI as primary
+    primary_redirect_uri = redirect_uris[0]
+    
+    db_client = OAuthClient(
+        client_id=client_id,
+        client_secret=client_secret_hash,
+        redirect_uri=primary_redirect_uri,
+        name=client_name
+    )
+    db.add(db_client)
+    db.commit()
+    db.refresh(db_client)
+    
+    # Return RFC 7591 compliant response
+    response = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "client_name": client_name,
+        "redirect_uris": redirect_uris,
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+        "client_id_issued_at": int(datetime.utcnow().timestamp()),
+        "client_secret_expires_at": 0  # Never expires
+    }
+    
+    return response
+
+# Legacy client registration (for backward compatibility)
 @app.post("/register_client")
-def register_client(name: str = Form(...), redirect_uri: str = Form(...), db: Session = Depends(get_db)):
+def register_client_legacy(name: str = Form(...), redirect_uri: str = Form(...), db: Session = Depends(get_db)):
     client_id = secrets.token_urlsafe(16)
     client_secret = secrets.token_urlsafe(32)
     client_secret_hash = hashlib.sha256(client_secret.encode()).hexdigest()
@@ -234,7 +477,82 @@ def register_client(name: str = Form(...), redirect_uri: str = Form(...), db: Se
         "redirect_uri": redirect_uri
     }
 
-# OAuth 2.0 Authorization endpoint
+# Third-party provider registration (admin endpoint)
+@app.post("/admin/register_provider")
+def register_third_party_provider(
+    name: str = Form(...),
+    client_id: str = Form(...),
+    client_secret: str = Form(...),
+    authorization_endpoint: str = Form(...),
+    token_endpoint: str = Form(...),
+    userinfo_endpoint: str = Form(...),
+    scope: str = Form("openid profile email"),
+    db: Session = Depends(get_db)
+):
+    # Check if provider already exists
+    existing = get_third_party_provider_by_name(db, name)
+    if existing:
+        raise HTTPException(status_code=400, detail="Provider already exists")
+    
+    provider = ThirdPartyProvider(
+        name=name,
+        client_id=client_id,
+        client_secret=client_secret,
+        authorization_endpoint=authorization_endpoint,
+        token_endpoint=token_endpoint,
+        userinfo_endpoint=userinfo_endpoint,
+        scope=scope
+    )
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    
+    return {
+        "id": provider.id,
+        "name": provider.name,
+        "message": "Third-party provider registered successfully"
+    }
+
+# List third-party providers
+@app.get("/admin/providers")
+def list_third_party_providers(db: Session = Depends(get_db)):
+    providers = db.query(ThirdPartyProvider).filter(ThirdPartyProvider.is_active == True).all()
+    return {
+        "providers": [
+            {
+                "id": provider.id,
+                "name": provider.name,
+                "authorization_endpoint": provider.authorization_endpoint,
+                "scope": provider.scope,
+                "created_at": provider.created_at.isoformat()
+            }
+            for provider in providers
+        ]
+    }
+
+# Deactivate third-party provider
+@app.post("/admin/providers/{provider_id}/deactivate")
+def deactivate_third_party_provider(provider_id: int, db: Session = Depends(get_db)):
+    provider = get_third_party_provider(db, provider_id)
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    
+    provider.is_active = False
+    
+    # Mark all sessions for this provider as inactive
+    sessions = db.query(ThirdPartySession).filter(
+        ThirdPartySession.provider_id == provider_id,
+        ThirdPartySession.is_active == True
+    ).all()
+    
+    for session in sessions:
+        session.is_active = False
+    
+    db.commit()
+    
+    return {"message": "Provider deactivated successfully"}
+
+# OAuth 2.0 Authorization endpoint (with third-party support)
 @app.get("/oauth/authorize")
 def authorize(
     response_type: str,
@@ -242,6 +560,7 @@ def authorize(
     redirect_uri: str,
     scope: Optional[str] = None,
     state: Optional[str] = None,
+    provider: Optional[str] = None,  # Third-party provider name
     db: Session = Depends(get_db)
 ):
     # Validate client
@@ -255,6 +574,29 @@ def authorize(
     if response_type != "code":
         raise HTTPException(status_code=400, detail="Unsupported response_type")
     
+    # Third-party authorization flow
+    if provider:
+        third_party_provider = get_third_party_provider_by_name(db, provider)
+        if not third_party_provider:
+            raise HTTPException(status_code=400, detail="Invalid third-party provider")
+        
+        # Create third-party session
+        session = create_third_party_session(db, third_party_provider.id, client_id, redirect_uri, state)
+        
+        # Build third-party authorization URL
+        third_party_redirect_uri = f"{BASE_URL}/oauth/third-party/callback/{session.session_id}"
+        params = {
+            "response_type": "code",
+            "client_id": third_party_provider.client_id,
+            "redirect_uri": third_party_redirect_uri,
+            "scope": third_party_provider.scope,
+            "state": session.session_id
+        }
+        
+        authorization_url = f"{third_party_provider.authorization_endpoint}?{urllib.parse.urlencode(params)}"
+        return RedirectResponse(url=authorization_url)
+    
+    # Standard MCP authorization flow
     # Return login form
     login_form = f"""
     <html>
@@ -319,6 +661,114 @@ def oauth_login(
     redirect_url = f"{redirect_uri}?{urllib.parse.urlencode(params)}"
     return RedirectResponse(url=redirect_url)
 
+# Third-party OAuth callback
+@app.get("/oauth/third-party/callback/{session_id}")
+async def third_party_callback(
+    session_id: str,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    # Validate session
+    session = get_third_party_session(db, session_id)
+    if not session:
+        raise HTTPException(status_code=400, detail="Invalid or expired session")
+    
+    # Check for authorization error
+    if error:
+        # Redirect back to client with error
+        params = {"error": error, "error_description": "Third-party authorization failed"}
+        if session.state:
+            params["state"] = session.state
+        error_url = f"{session.original_redirect_uri}?{urllib.parse.urlencode(params)}"
+        return RedirectResponse(url=error_url)
+    
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+    
+    # Get provider
+    provider = get_third_party_provider(db, session.provider_id)
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider not found")
+    
+    try:
+        # Exchange code for tokens
+        redirect_uri = f"{BASE_URL}/oauth/third-party/callback/{session_id}"
+        token_response = await exchange_third_party_code(provider, code, redirect_uri)
+        
+        third_party_access_token = token_response.get("access_token")
+        third_party_refresh_token = token_response.get("refresh_token")
+        expires_in = token_response.get("expires_in")
+        
+        if not third_party_access_token:
+            raise HTTPException(status_code=400, detail="No access token received")
+        
+        # Get user info from third-party
+        user_info = await get_third_party_user_info(provider, third_party_access_token)
+        third_party_user_id = user_info.get("sub") or user_info.get("id") or user_info.get("user_id")
+        
+        if not third_party_user_id:
+            raise HTTPException(status_code=400, detail="Unable to get user ID from third-party")
+        
+        # Update session with third-party tokens and user info
+        session.third_party_access_token = third_party_access_token
+        session.third_party_refresh_token = third_party_refresh_token
+        session.third_party_user_id = str(third_party_user_id)
+        
+        if expires_in:
+            session.third_party_token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
+        
+        # Generate MCP access token bound to this third-party session
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        mcp_access_token = create_access_token(
+            data={
+                "sub": f"third_party_{provider.name}_{third_party_user_id}",
+                "user_id": third_party_user_id,
+                "provider": provider.name,
+                "session_id": session_id,
+                "token_type": "third_party_bound"
+            },
+            expires_delta=access_token_expires,
+            scope="profile email"
+        )
+        
+        session.mcp_access_token = mcp_access_token
+        db.commit()
+        
+        # Generate authorization code for final step
+        auth_code = generate_authorization_code()
+        expires_at = datetime.utcnow() + timedelta(minutes=AUTHORIZATION_CODE_EXPIRE_MINUTES)
+        
+        db_auth_code = AuthorizationCode(
+            code=auth_code,
+            client_id=session.mcp_client_id,
+            user_id=0,  # Use 0 for third-party users
+            redirect_uri=session.original_redirect_uri,
+            expires_at=expires_at
+        )
+        db.add(db_auth_code)
+        db.commit()
+        
+        # Redirect back to original client with authorization code
+        params = {"code": auth_code}
+        if session.state:
+            params["state"] = session.state
+        
+        redirect_url = f"{session.original_redirect_uri}?{urllib.parse.urlencode(params)}"
+        return RedirectResponse(url=redirect_url)
+        
+    except Exception as e:
+        # Mark session as inactive on error
+        session.is_active = False
+        db.commit()
+        
+        params = {"error": "server_error", "error_description": "Third-party authorization processing failed"}
+        if session.state:
+            params["state"] = session.state
+        error_url = f"{session.original_redirect_uri}?{urllib.parse.urlencode(params)}"
+        return RedirectResponse(url=error_url)
+
 # OAuth token endpoint
 @app.post("/oauth/token")
 def get_token(
@@ -355,17 +805,32 @@ def get_token(
         auth_code.used = True
         db.commit()
         
-        # Get user
-        user = get_user_by_id(db, auth_code.user_id)
-        if not user:
-            raise HTTPException(status_code=400, detail="User not found")
-        
-        # Create access token
-        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-        access_token = create_access_token(
-            data={"sub": user.username, "user_id": user.id},
-            expires_delta=access_token_expires
-        )
+        # Handle third-party vs standard users
+        if auth_code.user_id == 0:
+            # Third-party user - find associated session
+            session = db.query(ThirdPartySession).filter(
+                ThirdPartySession.mcp_client_id == client_id,
+                ThirdPartySession.is_active == True
+            ).first()
+            
+            if not session or not validate_third_party_token_status(db, session):
+                raise HTTPException(status_code=400, detail="Invalid or expired third-party session")
+            
+            # Use the pre-generated MCP token bound to the third-party session
+            access_token = session.mcp_access_token
+        else:
+            # Standard user
+            user = get_user_by_id(db, auth_code.user_id)
+            if not user:
+                raise HTTPException(status_code=400, detail="User not found")
+            
+            # Create access token
+            access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            access_token = create_access_token(
+                data={"sub": user.username, "user_id": user.id},
+                expires_delta=access_token_expires,
+                scope="profile email"
+            )
         
         return {
             "access_token": access_token,
@@ -375,6 +840,43 @@ def get_token(
     
     else:
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
+
+# OAuth 2.0 Token Revocation (RFC 7009)
+@app.post("/revoke")
+def revoke_token(
+    token: str = Form(...),
+    token_type_hint: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
+    client_secret: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+    # Verify client if credentials provided
+    if client_id and client_secret:
+        if not verify_client_secret(db, client_id, client_secret):
+            raise HTTPException(status_code=400, detail="Invalid client credentials")
+    
+    try:
+        # Decode token to get information
+        payload = jwt.decode(token, public_pem, algorithms=[ALGORITHM])
+        token_type = payload.get("token_type")
+        session_id = payload.get("session_id")
+        
+        # Handle third-party bound tokens
+        if token_type == "third_party_bound" and session_id:
+            session = get_third_party_session(db, session_id)
+            if session:
+                session.is_active = False
+                db.commit()
+        
+        # For regular tokens, we could maintain a blacklist in production
+        # For now, just return success as the token will expire naturally
+        
+    except JWTError:
+        # Token is invalid or malformed - still return success per RFC 7009
+        pass
+    
+    # Always return 200 OK per RFC 7009 (don't leak token validity information)
+    return {"message": "Token revocation successful"}
 
 # Direct token endpoint (for testing)
 @app.post("/token")
@@ -388,18 +890,43 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "user_id": user.id}, expires_delta=access_token_expires
+        data={"sub": user.username, "user_id": user.id}, 
+        expires_delta=access_token_expires,
+        scope="profile email"
     )
     return {"access_token": access_token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
 
 # User info endpoint
 @app.get("/oauth/userinfo")
-def get_user_info(current_user: User = Depends(get_current_user)):
-    return {
-        "id": current_user.id,
-        "username": current_user.username,
-        "email": current_user.email
-    }
+def get_user_info(current_user: User = Depends(get_current_user), token: str = Depends(oauth2_scheme)):
+    # Get token payload to check scopes
+    try:
+        payload = jwt.decode(token, public_pem, algorithms=[ALGORITHM])
+        scopes = payload.get("scope", "profile email").split()
+    except JWTError:
+        scopes = ["profile", "email"]  # Default scopes
+    
+    user_info = {}
+    
+    # Include profile information if profile scope is present
+    if "profile" in scopes:
+        user_info.update({
+            "sub": str(current_user.id),
+            "preferred_username": current_user.username
+        })
+        
+        # Add provider info for third-party users
+        if hasattr(current_user, "is_third_party") and current_user.is_third_party:
+            user_info["provider"] = current_user.provider
+    
+    # Include email if email scope is present
+    if "email" in scopes:
+        user_info.update({
+            "email": current_user.email,
+            "email_verified": True  # Assume verified for this implementation
+        })
+    
+    return user_info
 
 # Health check
 @app.get("/")
@@ -432,18 +959,40 @@ def jwks():
 
 # Well-known OAuth configuration
 @app.get("/.well-known/oauth-authorization-server")
-def oauth_metadata():
-    return {
+def oauth_metadata(db: Session = Depends(get_db)):
+    # Get available third-party providers
+    providers = db.query(ThirdPartyProvider).filter(ThirdPartyProvider.is_active == True).all()
+    provider_names = [provider.name for provider in providers]
+    
+    metadata = {
         "issuer": BASE_URL,
         "authorization_endpoint": f"{BASE_URL}/oauth/authorize",
         "token_endpoint": f"{BASE_URL}/oauth/token",
+        "registration_endpoint": f"{BASE_URL}/register",
+        "revocation_endpoint": f"{BASE_URL}/revoke",
         "userinfo_endpoint": f"{BASE_URL}/oauth/userinfo",
         "jwks_uri": f"{BASE_URL}/.well-known/jwks.json",
+        "scopes_supported": ["profile", "email"],
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
-        "id_token_signing_alg_values_supported": [ALGORITHM]
+        "response_modes_supported": ["query"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "token_endpoint_auth_signing_alg_values_supported": [ALGORITHM],
+        "code_challenge_methods_supported": ["S256"],
+        "request_parameter_supported": False,
+        "request_uri_parameter_supported": False,
+        "require_request_uri_registration": False,
+        "require_pushed_authorization_requests": False,
+        "pkce_required": False
     }
+    
+    # Add MCP third-party authorization extension
+    if provider_names:
+        metadata["third_party_providers_supported"] = provider_names
+        metadata["third_party_authorization_endpoint"] = f"{BASE_URL}/oauth/authorize?provider={{provider_name}}"
+        metadata["mcp_third_party_authorization_flow"] = "2025-03-26"
+    
+    return metadata
 
 if __name__ == "__main__":
     import uvicorn
