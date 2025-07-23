@@ -18,7 +18,7 @@ import base64
 import json
 import httpx
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec
 from dotenv import load_dotenv
 import logging
 import time
@@ -45,7 +45,7 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
 
-# RSA key pair for JWT signing
+# ECDSA key pair for JWT signing
 def load_or_generate_keys():
     private_key_path = os.getenv("PRIVATE_KEY_PATH", "jwt_private_key.pem")
     public_key_path = os.getenv("PUBLIC_KEY_PATH", "jwt_public_key.pem")
@@ -57,16 +57,13 @@ def load_or_generate_keys():
                 private_key = serialization.load_pem_private_key(f.read(), password=None)
             with open(public_key_path, "rb") as f:
                 public_key = serialization.load_pem_public_key(f.read())
-            logger.info("Loaded existing RSA keys")
+            logger.info("Loaded existing ECDSA keys")
             return private_key, public_key
         except Exception as e:
             logger.warning(f"Error loading keys: {e}, generating new ones")
     
-    # Generate new keys if loading failed or files don't exist
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-    )
+    # Generate new ECDSA keys if loading failed or files don't exist
+    private_key = ec.generate_private_key(ec.SECP256R1())
     public_key = private_key.public_key()
     
     # Save keys if in development mode
@@ -83,11 +80,11 @@ def load_or_generate_keys():
                     encoding=serialization.Encoding.PEM,
                     format=serialization.PublicFormat.SubjectPublicKeyInfo
                 ))
-            logger.info(f"Generated and saved new RSA keys to {private_key_path} and {public_key_path}")
+            logger.info(f"Generated and saved new ECDSA keys to {private_key_path} and {public_key_path}")
         except Exception as e:
             logger.error(f"Could not save keys: {e}")
     else:
-        logger.info("Generated new RSA keys (not saved)")
+        logger.info("Generated new ECDSA keys (not saved)")
     
     return private_key, public_key
 
@@ -121,7 +118,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Security
-ALGORITHM = "RS256"  # Changed to RSA
+ALGORITHM = "ES256"  # Changed to ECDSA
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 AUTHORIZATION_CODE_EXPIRE_MINUTES = int(os.getenv("AUTHORIZATION_CODE_EXPIRE_MINUTES", "10"))
 
@@ -1058,23 +1055,29 @@ def root():
 # JWKS endpoint
 @app.get("/.well-known/jwks.json")
 def jwks():
-    # Get RSA public key components
+    # Get ECDSA public key components
     public_numbers = public_key.public_numbers()
     
-    # Convert to base64url encoding
+    # Convert to base64url encoding for ECDSA coordinates
     def int_to_base64url_uint(val):
-        val_bytes = val.to_bytes((val.bit_length() + 7) // 8, 'big')
+        # For P-256, coordinates are 32 bytes (256 bits)
+        val_bytes = val.to_bytes(32, 'big')
         return base64.urlsafe_b64encode(val_bytes).decode('utf-8').rstrip('=')
     
     return {
         "keys": [
             {
-                "kty": "RSA",
+                "kty": "EC",
                 "kid": KEY_ID,
                 "use": "sig",
                 "alg": ALGORITHM,
-                "n": int_to_base64url_uint(public_numbers.n),
-                "e": int_to_base64url_uint(public_numbers.e)
+                "crv": "P-256",
+                "x": int_to_base64url_uint(public_numbers.x),
+                "y": int_to_base64url_uint(public_numbers.y),
+                "ext": True,
+                "key_ops": [
+                    "verify"
+                ]
             }
         ]
     }
