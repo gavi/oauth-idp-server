@@ -668,8 +668,15 @@ def authorize(
         logger.warning(f"OAuth authorization failed: invalid client_id {client_id}")
         raise HTTPException(status_code=400, detail="Invalid client_id")
     
-    if client.redirect_uri != redirect_uri:
-        logger.warning(f"OAuth authorization failed: redirect URI mismatch for client {client_id}")
+    # Parse base URI from registered redirect_uri (scheme + host + port)
+    from urllib.parse import urlparse
+    registered_parsed = urlparse(client.redirect_uri)
+    request_parsed = urlparse(redirect_uri)
+    
+    # Check if scheme, host, and port match
+    if (registered_parsed.scheme != request_parsed.scheme or 
+        registered_parsed.netloc != request_parsed.netloc):
+        logger.warning(f"OAuth authorization failed: redirect URI base mismatch for client {client_id}")
         raise HTTPException(status_code=400, detail="Invalid redirect_uri")
     
     if response_type != "code":
