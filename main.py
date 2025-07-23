@@ -767,7 +767,7 @@ def oauth_login(
     
     redirect_url = f"{redirect_uri}?{urllib.parse.urlencode(params)}"
     logger.info(f"Redirecting to callback URL: {redirect_url}")
-    return RedirectResponse(url=redirect_url)
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 # Third-party OAuth callback
 @app.get("/oauth/third-party/callback/{session_id}")
