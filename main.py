@@ -20,7 +20,22 @@ import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dotenv import load_dotenv
+import logging
+import time
+import uuid
 load_dotenv()
+
+# Logging configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ]
+)
+
+logger = logging.getLogger("oauth_idp")
 
 # Environment variables
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
@@ -42,10 +57,10 @@ def load_or_generate_keys():
                 private_key = serialization.load_pem_private_key(f.read(), password=None)
             with open(public_key_path, "rb") as f:
                 public_key = serialization.load_pem_public_key(f.read())
-            print("Loaded existing RSA keys")
+            logger.info("Loaded existing RSA keys")
             return private_key, public_key
         except Exception as e:
-            print(f"Error loading keys: {e}, generating new ones")
+            logger.warning(f"Error loading keys: {e}, generating new ones")
     
     # Generate new keys if loading failed or files don't exist
     private_key = rsa.generate_private_key(
@@ -68,11 +83,11 @@ def load_or_generate_keys():
                     encoding=serialization.Encoding.PEM,
                     format=serialization.PublicFormat.SubjectPublicKeyInfo
                 ))
-            print(f"Generated and saved new RSA keys to {private_key_path} and {public_key_path}")
+            logger.info(f"Generated and saved new RSA keys to {private_key_path} and {public_key_path}")
         except Exception as e:
-            print(f"Could not save keys: {e}")
+            logger.error(f"Could not save keys: {e}")
     else:
-        print("Generated new RSA keys (not saved)")
+        logger.info("Generated new RSA keys (not saved)")
     
     return private_key, public_key
 
@@ -92,8 +107,11 @@ public_pem = public_key.public_bytes(
 # Key ID for JWKS
 KEY_ID = "main-key-" + secrets.token_hex(8)
 
-print(f"Server starting on port {PORT}")
-print(f"JWT Key ID: {KEY_ID}")
+logger.info(f"Server starting on port {PORT}")
+logger.info(f"JWT Key ID: {KEY_ID}")
+logger.info(f"Base URL: {BASE_URL}")
+logger.info(f"Database URL: {DATABASE_URL}")
+logger.info(f"Log level: {LOG_LEVEL}")
 # Database setup
 engine = create_engine(
     DATABASE_URL, 
@@ -111,6 +129,77 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 app = FastAPI(title="OAuth IdP Server", version="1.0.0")
+
+# Request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    # Generate unique request ID
+    request_id = str(uuid.uuid4())[:8]
+    
+    # Log request details
+    start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "unknown")
+    
+    # Get request body for POST requests (be careful with sensitive data)
+    body = None
+    if request.method in ["POST", "PUT", "PATCH"]:
+        try:
+            # Read body but restore it for the actual handler
+            body_bytes = await request.body()
+            
+            # Only log form data, not raw body for security
+            if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+                body_str = body_bytes.decode("utf-8")
+                # Hide sensitive fields like passwords and secrets
+                body_parts = []
+                for part in body_str.split("&"):
+                    if "=" in part:
+                        key, value = part.split("=", 1)
+                        if any(sensitive in key.lower() for sensitive in ["password", "secret", "token"]):
+                            body_parts.append(f"{key}=***REDACTED***")
+                        else:
+                            body_parts.append(part)
+                    else:
+                        body_parts.append(part)
+                body = "&".join(body_parts)
+            elif request.headers.get("content-type", "").startswith("application/json"):
+                try:
+                    json_body = json.loads(body_bytes.decode("utf-8"))
+                    # Redact sensitive fields
+                    for key in list(json_body.keys()):
+                        if any(sensitive in key.lower() for sensitive in ["password", "secret", "token"]):
+                            json_body[key] = "***REDACTED***"
+                    body = json.dumps(json_body)
+                except:
+                    body = "***INVALID_JSON***"
+            
+            # Recreate request with body for the handler
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+            
+            request._receive = receive
+        except Exception as e:
+            logger.debug(f"Could not read request body: {e}")
+    
+    logger.info(f"[{request_id}] {request.method} {request.url.path} - Client: {client_ip} - UA: {user_agent[:100]}")
+    if request.url.query:
+        logger.info(f"[{request_id}] Query params: {request.url.query}")
+    if body:
+        logger.info(f"[{request_id}] Request body: {body}")
+    
+    # Process request
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        
+        logger.info(f"[{request_id}] Response: {response.status_code} - Time: {process_time:.3f}s")
+        
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"[{request_id}] Request failed: {str(e)} - Time: {process_time:.3f}s")
+        raise
 
 # CORS middleware
 app.add_middleware(
@@ -233,11 +322,15 @@ def get_user_by_id(db: Session, user_id: int):
     return db.query(User).filter(User.id == user_id).first()
 
 def authenticate_user(db: Session, username: str, password: str):
+    logger.info(f"Authentication attempt for user: {username}")
     user = get_user(db, username)
     if not user:
+        logger.warning(f"Authentication failed: user {username} not found")
         return False
     if not verify_password(password, user.hashed_password):
+        logger.warning(f"Authentication failed: invalid password for user {username}")
         return False
+    logger.info(f"Authentication successful for user: {username}")
     return user
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -377,10 +470,13 @@ def validate_third_party_token_status(db: Session, session: ThirdPartySession):
 # API Endpoints
 
 # User registration (for testing - remove in production)
-@app.post("/register")
+@app.post("/admin/register")
 def register(username: str = Form(...), password: str = Form(...), email: str = Form(...), db: Session = Depends(get_db)):
+    logger.info(f"User registration attempt for username: {username}, email: {email}")
+    
     # Check if user exists
     if get_user(db, username):
+        logger.warning(f"Registration failed: username {username} already exists")
         raise HTTPException(status_code=400, detail="Username already registered")
     
     # Create new user
@@ -390,6 +486,7 @@ def register(username: str = Form(...), password: str = Form(...), email: str = 
     db.commit()
     db.refresh(db_user)
     
+    logger.info(f"User registration successful for username: {username}")
     return {"message": "User created successfully"}
 
 # OAuth 2.0 Dynamic Client Registration (RFC 7591)
@@ -563,25 +660,33 @@ def authorize(
     provider: Optional[str] = None,  # Third-party provider name
     db: Session = Depends(get_db)
 ):
+    logger.info(f"OAuth authorization request - client_id: {client_id}, redirect_uri: {redirect_uri}, scope: {scope}, provider: {provider}")
+    
     # Validate client
     client = get_oauth_client(db, client_id)
     if not client:
+        logger.warning(f"OAuth authorization failed: invalid client_id {client_id}")
         raise HTTPException(status_code=400, detail="Invalid client_id")
     
     if client.redirect_uri != redirect_uri:
+        logger.warning(f"OAuth authorization failed: redirect URI mismatch for client {client_id}")
         raise HTTPException(status_code=400, detail="Invalid redirect_uri")
     
     if response_type != "code":
+        logger.warning(f"OAuth authorization failed: unsupported response_type {response_type}")
         raise HTTPException(status_code=400, detail="Unsupported response_type")
     
     # Third-party authorization flow
     if provider:
+        logger.info(f"Third-party OAuth flow initiated for provider: {provider}")
         third_party_provider = get_third_party_provider_by_name(db, provider)
         if not third_party_provider:
+            logger.warning(f"Invalid third-party provider requested: {provider}")
             raise HTTPException(status_code=400, detail="Invalid third-party provider")
         
         # Create third-party session
         session = create_third_party_session(db, third_party_provider.id, client_id, redirect_uri, state)
+        logger.info(f"Created third-party session: {session.session_id} for provider: {provider}")
         
         # Build third-party authorization URL
         third_party_redirect_uri = f"{BASE_URL}/oauth/third-party/callback/{session.session_id}"
@@ -594,9 +699,11 @@ def authorize(
         }
         
         authorization_url = f"{third_party_provider.authorization_endpoint}?{urllib.parse.urlencode(params)}"
+        logger.info(f"Redirecting to third-party authorization URL: {authorization_url}")
         return RedirectResponse(url=authorization_url)
     
     # Standard MCP authorization flow
+    logger.info(f"Returning login form for client: {client.name}")
     # Return login form
     login_form = f"""
     <html>
@@ -779,8 +886,11 @@ def get_token(
     client_secret: str = Form(...),
     db: Session = Depends(get_db)
 ):
+    logger.info(f"Token request - grant_type: {grant_type}, client_id: {client_id}, redirect_uri: {redirect_uri}")
+    
     # Verify client
     if not verify_client_secret(db, client_id, client_secret):
+        logger.warning(f"Token request failed: invalid client credentials for client_id {client_id}")
         raise HTTPException(status_code=400, detail="Invalid client credentials")
     
     if grant_type == "authorization_code":
@@ -796,10 +906,14 @@ def get_token(
         ).first()
         
         if not auth_code:
+            logger.warning(f"Token exchange failed: invalid authorization code")
             raise HTTPException(status_code=400, detail="Invalid authorization code")
         
         if auth_code.expires_at < datetime.utcnow():
+            logger.warning(f"Token exchange failed: authorization code expired")
             raise HTTPException(status_code=400, detail="Authorization code expired")
+        
+        logger.info(f"Valid authorization code found, issuing access token for client {client_id}")
         
         # Mark code as used
         auth_code.used = True

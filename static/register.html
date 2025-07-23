@@ -118,7 +118,7 @@
             formData.append('password', document.getElementById('password').value);
             
             try {
-                const response = await fetch('/register', {
+                const response = await fetch('/admin/register', {
                     method: 'POST',
                     body: formData
                 });
