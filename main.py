@@ -878,7 +878,7 @@ async def third_party_callback(
         return RedirectResponse(url=error_url)
 
 # OAuth token endpoint
-@app.post("/oauth/token")
+@app.post("/token")
 def get_token(
     grant_type: str = Form(...),
     code: Optional[str] = Form(None),
@@ -1082,7 +1082,7 @@ def oauth_metadata(db: Session = Depends(get_db)):
     metadata = {
         "issuer": BASE_URL,
         "authorization_endpoint": f"{BASE_URL}/authorize",
-        "token_endpoint": f"{BASE_URL}/oauth/token",
+        "token_endpoint": f"{BASE_URL}/token",
         "registration_endpoint": f"{BASE_URL}/register",
         "revocation_endpoint": f"{BASE_URL}/revoke",
         "userinfo_endpoint": f"{BASE_URL}/oauth/userinfo",
