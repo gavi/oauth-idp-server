@@ -703,7 +703,7 @@ def authorize(
         return RedirectResponse(url=authorization_url)
     
     # Standard MCP authorization flow
-    logger.info(f"Returning login form for client: {client.name}")
+    logger.info(f"Returning login form for client: {client.name}, redirect_uri: {redirect_uri}")
     # Return login form
     login_form = f"""
     <html>
@@ -766,6 +766,7 @@ def oauth_login(
         params["state"] = state
     
     redirect_url = f"{redirect_uri}?{urllib.parse.urlencode(params)}"
+    logger.info(f"Redirecting to callback URL: {redirect_url}")
     return RedirectResponse(url=redirect_url)
 
 # Third-party OAuth callback
