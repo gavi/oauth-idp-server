@@ -1072,6 +1072,22 @@ def jwks():
         ]
     }
 
+# OAuth 2.0 Protected Resource Metadata (RFC 9728)
+@app.get("/.well-known/oauth-protected-resource")
+def protected_resource_metadata():
+    """OAuth 2.0 Protected Resource Metadata endpoint (RFC 9728)"""
+    return {
+        "resource": BASE_URL,
+        "authorization_servers": [BASE_URL],
+        "bearer_methods_supported": ["header"],
+        "scopes_supported": ["profile", "email"],
+        "jwks_uri": f"{BASE_URL}/.well-known/jwks.json",
+        "resource_name": "OAuth IdP Server Protected Resource",
+        "resource_documentation": f"{BASE_URL}/static/login.html",
+        "tls_client_certificate_bound_access_tokens": False,
+        "dpop_bound_access_tokens_required": False
+    }
+
 # Well-known OAuth configuration
 @app.get("/.well-known/oauth-authorization-server")
 def oauth_metadata(db: Session = Depends(get_db)):
