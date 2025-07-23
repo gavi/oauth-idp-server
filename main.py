@@ -650,7 +650,7 @@ def deactivate_third_party_provider(provider_id: int, db: Session = Depends(get_
     return {"message": "Provider deactivated successfully"}
 
 # OAuth 2.0 Authorization endpoint (with third-party support)
-@app.get("/oauth/authorize")
+@app.get("/authorize")
 def authorize(
     response_type: str,
     client_id: str,
@@ -1081,7 +1081,7 @@ def oauth_metadata(db: Session = Depends(get_db)):
     
     metadata = {
         "issuer": BASE_URL,
-        "authorization_endpoint": f"{BASE_URL}/oauth/authorize",
+        "authorization_endpoint": f"{BASE_URL}/authorize",
         "token_endpoint": f"{BASE_URL}/oauth/token",
         "registration_endpoint": f"{BASE_URL}/register",
         "revocation_endpoint": f"{BASE_URL}/revoke",
