@@ -993,8 +993,8 @@ def revoke_token(
     # Always return 200 OK per RFC 7009 (don't leak token validity information)
     return {"message": "Token revocation successful"}
 
-# Direct token endpoint (for testing)
-@app.post("/token")
+# Direct token endpoint (for testing with password grant)
+@app.post("/auth/token")
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:

@@ -224,7 +224,7 @@
             formData.append('password', document.getElementById('password').value);
             
             try {
-                const response = await fetch('/token', {
+                const response = await fetch('/auth/token', {
                     method: 'POST',
                     body: formData
                 });
