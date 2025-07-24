@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, status, Form, Request
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -997,26 +997,9 @@ def revoke_token(
     # Always return 200 OK per RFC 7009 (don't leak token validity information)
     return {"message": "Token revocation successful"}
 
-# Direct token endpoint (for testing with password grant)
-@app.post("/auth/token")
-def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username, "user_id": user.id}, 
-        expires_delta=access_token_expires,
-        scope="profile email"
-    )
-    return {"access_token": access_token, "token_type": "bearer", "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60}
 
 # User info endpoint
-@app.get("/oauth/userinfo")
+@app.get("/userinfo")
 def get_user_info(current_user: User = Depends(get_current_user), token: str = Depends(oauth2_scheme)):
     # Get token payload to check scopes
     try:
@@ -1046,6 +1029,63 @@ def get_user_info(current_user: User = Depends(get_current_user), token: str = D
         })
     
     return user_info
+
+# Test callback endpoint for login page
+@app.get("/test-callback")
+def test_callback(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
+    if error:
+        return HTMLResponse(f"""
+        <html>
+            <head><title>Login Error</title></head>
+            <body>
+                <h2>Login Failed</h2>
+                <p>Error: {error}</p>
+                <script>
+                    window.opener?.postMessage({{
+                        type: 'oauth_error',
+                        error: '{error}'
+                    }}, window.location.origin);
+                    window.close();
+                </script>
+            </body>
+        </html>
+        """)
+    
+    if code:
+        return HTMLResponse(f"""
+        <html>
+            <head><title>Login Success</title></head>
+            <body>
+                <h2>Login Successful!</h2>
+                <p>Authorization code received. You can close this window.</p>
+                <script>
+                    window.opener?.postMessage({{
+                        type: 'oauth_success',
+                        code: '{code}',
+                        state: '{state or ''}'
+                    }}, window.location.origin);
+                    window.close();
+                </script>
+            </body>
+        </html>
+        """)
+    
+    return HTMLResponse("""
+    <html>
+        <head><title>Invalid Callback</title></head>
+        <body>
+            <h2>Invalid Callback</h2>
+            <p>No authorization code received.</p>
+            <script>
+                window.opener?.postMessage({
+                    type: 'oauth_error',
+                    error: 'no_code'
+                }, window.location.origin);
+                window.close();
+            </script>
+        </body>
+    </html>
+    """)
 
 # Health check
 @app.get("/")
@@ -1111,7 +1151,7 @@ def oauth_metadata(db: Session = Depends(get_db)):
         "token_endpoint": f"{BASE_URL}/token",
         "registration_endpoint": f"{BASE_URL}/register",
         "revocation_endpoint": f"{BASE_URL}/revoke",
-        "userinfo_endpoint": f"{BASE_URL}/oauth/userinfo",
+        "userinfo_endpoint": f"{BASE_URL}/userinfo",
         "jwks_uri": f"{BASE_URL}/.well-known/jwks.json",
         "scopes_supported": ["profile", "email"],
         "response_types_supported": ["code"],

@@ -214,63 +214,86 @@
     </div>
 
     <script>
-        // Standard login form
+        // Standard login form - now using proper OAuth flow with popup
         document.getElementById('loginForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            const formData = new FormData();
-            formData.append('grant_type', 'password');
-            formData.append('username', document.getElementById('username').value);
-            formData.append('password', document.getElementById('password').value);
+            // For testing, we'll create a temporary client and use OAuth flow
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            const testRedirectUri = window.location.origin + '/test-callback';
             
             try {
-                const response = await fetch('/auth/token', {
+                // Step 1: Register a temporary test client
+                const clientResponse = await fetch('/register', {
                     method: 'POST',
-                    body: formData
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        client_name: 'Test Login Client',
+                        redirect_uris: [testRedirectUri]
+                    })
                 });
                 
-                const result = await response.json();
-                const messageDiv = document.getElementById('message');
-                
-                if (response.ok) {
-                    messageDiv.className = 'message success';
-                    messageDiv.innerHTML = `<strong>Login successful!</strong>`;
-                    
-                    // Display full JWT details
-                    displayJWTDetails(result.access_token);
-                    
-                    // Store token for testing
-                    localStorage.setItem('access_token', result.access_token);
-                    
-                    // Test getting user info
-                    setTimeout(async () => {
-                        try {
-                            const userResponse = await fetch('/oauth/userinfo', {
-                                headers: {
-                                    'Authorization': `Bearer ${result.access_token}`
-                                }
-                            });
-                            const userInfo = await userResponse.json();
-                            if (userResponse.ok) {
-                                const userInfoDiv = document.createElement('div');
-                                userInfoDiv.innerHTML = `<br><strong>User Info:</strong> ${userInfo.username} (${userInfo.email})`;
-                                messageDiv.appendChild(userInfoDiv);
-                            }
-                        } catch (e) {
-                            console.error('Error fetching user info:', e);
-                        }
-                    }, 500);
-                    
-                } else {
-                    messageDiv.className = 'message error';
-                    messageDiv.textContent = result.detail || 'Login failed';
+                if (!clientResponse.ok) {
+                    throw new Error('Failed to create test client');
                 }
                 
+                const clientData = await clientResponse.json();
+                
+                // Store client data for token exchange
+                currentClientData = clientData;
+                console.log('Stored client data:', currentClientData);
+                
+                // Step 2: Open popup window and submit form to it
+                const popupName = 'oauth_popup_' + Date.now();
+                const popup = window.open('', popupName, 'width=500,height=600,scrollbars=yes,resizable=yes');
+                
+                if (!popup) {
+                    throw new Error('Popup blocked. Please allow popups for this site.');
+                }
+                
+                // Create form to submit credentials directly to OAuth login
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '/oauth/login';
+                form.target = popupName;
+                form.style.display = 'none';
+                
+                // Add form fields
+                const fields = {
+                    username: username,
+                    password: password,
+                    client_id: clientData.client_id,
+                    redirect_uri: testRedirectUri,
+                    state: 'test-login-' + Date.now()
+                };
+                
+                for (const [key, value] of Object.entries(fields)) {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = key;
+                    input.value = value;
+                    form.appendChild(input);
+                }
+                
+                document.body.appendChild(form);
+                console.log('Submitting form to popup window:', popupName);
+                form.submit();
+                document.body.removeChild(form);
+                
+                // Show waiting message
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message';
+                messageDiv.innerHTML = '<strong>Processing login...</strong><br><small>Please wait for the callback window.</small>';
                 messageDiv.style.display = 'block';
+                
             } catch (error) {
                 const messageDiv = document.getElementById('message');
                 messageDiv.className = 'message error';
-                messageDiv.textContent = 'Network error: ' + error.message;
+                messageDiv.textContent = 'Login error: ' + error.message;
                 messageDiv.style.display = 'block';
             }
         });
@@ -294,7 +317,7 @@
             });
             
             // Open OAuth authorization in new window
-            const authUrl = `/oauth/authorize?${params.toString()}`;
+            const authUrl = `/authorize?${params.toString()}`;
             window.open(authUrl, 'oauth', 'width=500,height=600');
         }
         
@@ -424,11 +447,27 @@
             });
         }
         
-        // Handle OAuth callback (if on same domain)
+        // Handle OAuth callback from test-callback endpoint
         window.addEventListener('message', function(event) {
-            if (event.origin !== window.location.origin) return;
+            console.log('Received message:', event.data, 'from origin:', event.origin);
             
-            if (event.data.type === 'oauth_callback') {
+            if (event.origin !== window.location.origin) {
+                console.log('Origin mismatch, ignoring message');
+                return;
+            }
+            
+            if (event.data.type === 'oauth_success') {
+                console.log('OAuth success received, handling auth code:', event.data.code);
+                // We got the authorization code, now exchange it for a token
+                handleAuthorizationCode(event.data.code, event.data.state);
+            } else if (event.data.type === 'oauth_error') {
+                console.log('OAuth error received:', event.data.error);
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message error';
+                messageDiv.textContent = `OAuth Error: ${event.data.error}`;
+                messageDiv.style.display = 'block';
+            } else if (event.data.type === 'oauth_callback') {
+                console.log('Legacy oauth_callback received');
                 const messageDiv = document.getElementById('message');
                 messageDiv.className = 'message success';
                 messageDiv.innerHTML = `
@@ -439,6 +478,83 @@
                 messageDiv.style.display = 'block';
             }
         });
+        
+        // Store client data for token exchange
+        let currentClientData = null;
+        
+        // Handle authorization code from callback
+        async function handleAuthorizationCode(authCode, state) {
+            console.log('handleAuthorizationCode called with:', { authCode, state, currentClientData });
+            
+            if (!currentClientData) {
+                console.error('No currentClientData available');
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'No client data available for token exchange';
+                messageDiv.style.display = 'block';
+                return;
+            }
+            
+            console.log('Exchanging auth code for token...');
+            try {
+                // Exchange authorization code for access token
+                const tokenForm = new FormData();
+                tokenForm.append('grant_type', 'authorization_code');
+                tokenForm.append('code', authCode);
+                tokenForm.append('redirect_uri', window.location.origin + '/test-callback');
+                tokenForm.append('client_id', currentClientData.client_id);
+                tokenForm.append('client_secret', currentClientData.client_secret);
+                
+                const tokenResponse = await fetch('/token', {
+                    method: 'POST',
+                    body: tokenForm
+                });
+                
+                const tokenResult = await tokenResponse.json();
+                const messageDiv = document.getElementById('message');
+                
+                if (tokenResponse.ok) {
+                    messageDiv.className = 'message success';
+                    messageDiv.innerHTML = `<strong>Login successful!</strong>`;
+                    
+                    // Display full JWT details
+                    displayJWTDetails(tokenResult.access_token);
+                    
+                    // Store token for testing
+                    localStorage.setItem('access_token', tokenResult.access_token);
+                    
+                    // Test getting user info
+                    setTimeout(async () => {
+                        try {
+                            const userResponse = await fetch('/userinfo', {
+                                headers: {
+                                    'Authorization': `Bearer ${tokenResult.access_token}`
+                                }
+                            });
+                            const userInfo = await userResponse.json();
+                            if (userResponse.ok) {
+                                const userInfoDiv = document.createElement('div');
+                                userInfoDiv.innerHTML = `<br><strong>User Info:</strong> ${userInfo.preferred_username} (${userInfo.email})`;
+                                messageDiv.appendChild(userInfoDiv);
+                            }
+                        } catch (e) {
+                            console.error('Error fetching user info:', e);
+                        }
+                    }, 500);
+                    
+                } else {
+                    messageDiv.className = 'message error';
+                    messageDiv.textContent = tokenResult.detail || 'Token exchange failed';
+                }
+                
+                messageDiv.style.display = 'block';
+            } catch (error) {
+                const messageDiv = document.getElementById('message');
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'Token exchange error: ' + error.message;
+                messageDiv.style.display = 'block';
+            }
+        }
     </script>
 </body>
 </html>
