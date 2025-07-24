@@ -302,10 +302,10 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None, s
         "exp": expire,
         "iat": datetime.utcnow(),
         "iss": BASE_URL,
-        "kid": KEY_ID,
         "scope": scope
     })
-    encoded_jwt = jwt.encode(to_encode, private_pem, algorithm=ALGORITHM)
+    headers = {"kid": KEY_ID}
+    encoded_jwt = jwt.encode(to_encode, private_pem, algorithm=ALGORITHM, headers=headers)
     return encoded_jwt
 
 def generate_authorization_code():
