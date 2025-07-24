@@ -102,7 +102,7 @@ public_pem = public_key.public_bytes(
 )
 
 # Key ID for JWKS
-KEY_ID = "main-key-" + secrets.token_hex(8)
+KEY_ID = "main-key-ecdsa-2025"
 
 logger.info(f"Server starting on port {PORT}")
 logger.info(f"JWT Key ID: {KEY_ID}")
