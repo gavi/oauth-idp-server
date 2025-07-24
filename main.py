@@ -1124,7 +1124,8 @@ def oauth_metadata(db: Session = Depends(get_db)):
         "request_uri_parameter_supported": False,
         "require_request_uri_registration": False,
         "require_pushed_authorization_requests": False,
-        "pkce_required": False
+        "pkce_required": False,
+        "mcp_protocol_version": "2025-06-18"
     }
     
     # Add MCP third-party authorization extension
