@@ -1135,7 +1135,11 @@ def protected_resource_metadata():
         "resource_name": "OAuth IdP Server Protected Resource",
         "resource_documentation": f"{BASE_URL}/static/login.html",
         "tls_client_certificate_bound_access_tokens": False,
-        "dpop_bound_access_tokens_required": False
+        "dpop_bound_access_tokens_required": False,
+        "token_endpoint_auth_methods_supported": [
+            "none",
+            "client_secret_post"
+        ]
     }
 
 # Well-known OAuth configuration
